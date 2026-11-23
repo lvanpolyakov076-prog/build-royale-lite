@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: build-royale-lite
+    runtime: node
+    plan: free
+    region: frankfurt
+    buildCommand: npm run check
+    startCommand: npm start
+    healthCheckPath: /healthz
+    envVars:
+      - key: HOST
+        value: "0.0.0.0"
