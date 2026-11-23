@@ -2,6 +2,7 @@
 const http=require('node:http'),fs=require('node:fs'),path=require('node:path');
 const {randomBytes}=require('node:crypto');
 const rooms=new Map();
+const duelRounds=10,duelBreakMs=2500;
 const maps={
  harbor:{label:'Портовый район',max:8,bound:113,spawns:[[0,6],[14,11],[-17,11],[20,-16],[-14,-24],[32,5],[-30,10],[15,27]]},
  duel:{label:'Дуэльная арена',max:2,bound:24,spawns:[[0,17],[0,-17]]},
@@ -16,21 +17,44 @@ const text=(value,fallback,max)=>typeof value==='string'&&value.trim()?value.tri
 const listing=r=>({code:r.code,name:r.name,map:r.map,mapName:maps[r.map].label,players:r.players.size,limit:r.limit});
 function seizeHost(room){if(!room.players.has(room.host))room.host=room.players.keys().next().value;}
 function alive(room){return [...room.players.values()].filter(p=>p.hp>0);}
-function finishIfNeeded(room){
+function finishMatch(room,winner){
+ room.phase='result';room.winner=winner;
+ for(const p of room.players.values())p.ready=false;
+}
+function finishIfNeeded(room,now){
+ if(room.duel&&['live','intermission'].includes(room.phase)&&room.players.size<2){
+  room.duel.opponentLeft=true;
+  finishMatch(room,room.players.values().next().value?.name||'Ничья');
+  return;
+ }
  if(room.phase!=='live')return;
  const survivors=alive(room);
  if(survivors.length>1)return;
- room.phase='result';room.winner=survivors[0]?.name||'Ничья';
- for(const p of room.players.values())p.ready=false;
+ const winner=survivors[0];
+ if(!room.duel){finishMatch(room,winner?.name||'Ничья');return;}
+ const duel=room.duel;
+ duel.roundWinner=winner?.name||'';
+ if(winner)duel.scores.find(score=>score.id===idOf(winner)).wins++;
+ if(duel.round===duelRounds){
+  const [first,second]=duel.scores;
+  finishMatch(room,first.wins===second.wins?'Ничья':(first.wins>second.wins?first:second).name);
+  return;
+ }
+ room.phase='intermission';room.starts=now+duelBreakMs;
 }
 function tick(room,now){
  const elapsed=Math.min(1,Math.max(0,(now-room.lastTick)/1000));room.lastTick=now;
+ if(room.phase==='intermission'){
+  finishIfNeeded(room,now);
+  if(room.phase==='intermission'&&now>=room.starts)startRound(room,now);
+  return;
+ }
  if(room.phase==='countdown'&&now>=room.starts)room.phase='live';
  if(room.phase==='live'&&room.map==='box'){
   room.zone=Math.max(1.65,13.2-Math.max(0,(now-room.starts)/1000-4)*.36);
   for(const p of alive(room))if(Math.max(Math.abs(p.x),Math.abs(p.z))>room.zone)p.hp=Math.max(0,p.hp-12*elapsed);
  }
- finishIfNeeded(room);
+ finishIfNeeded(room,now);
 }
 function clean(now){
  for(const [code,room] of rooms){
@@ -46,7 +70,8 @@ function add(room,name,now){
   tool:'gun',weapon:'rifle',hp:100,kills:0,shield:0,rev:0,spawn:[0,0]};
  room.players.set(token,p);seizeHost(room);return p;
 }
-function start(room,now){
+function startRound(room,now){
+ if(room.duel){room.duel.round++;room.duel.roundWinner='';}
  room.phase=room.map==='box'?'countdown':'live';
  room.starts=now+(room.map==='box'?3000:0);
  room.zone=13.2;room.winner='';room.round++;room.lastTick=now;
@@ -66,6 +91,7 @@ function snapshot(room,p,now,damage=0){
  return {...listing(room),version:++room.version,self:publicPlayer(p),roster:[...room.players.values()].map(publicPlayer),
   host:room.host===p.token,hostId:room.host?.slice(0,12),phase:room.phase,round:room.round,
   countdown:Math.max(0,(room.starts-now)/1000),zone:room.zone,winner:room.winner,damage,
+  duel:room.duel,
   pieces:[...room.pieces.values()],harvested:[...room.harvested],effects:room.shots.filter(event=>now-event.time<450)};
 }
 function move(room,p,state,now){
@@ -177,7 +203,7 @@ const server=http.createServer(async(req,res)=>{
    if(!Number.isInteger(limit)||limit<2||limit>maps[map].max){send(res,400,{error:'Неверное число игроков'});return;}
    let code;do{code=randomBytes(3).toString('hex').toUpperCase();}while(rooms.has(code));
    const room={code,map,limit,name:text(data.name,'Лобби',38),players:new Map(),pieces:new Map(),harvested:new Set(),
-    shots:[],version:0,host:null,phase:'lobby',starts:0,round:0,lastTick:now,zone:13.2,winner:''};
+    shots:[],version:0,host:null,phase:'lobby',starts:0,round:0,lastTick:now,zone:13.2,winner:'',duel:null};
    rooms.set(code,room);
    const p=add(room,text(data.player,'Игрок 1',22),now);
    send(res,200,{...snapshot(room,p,now),token:p.token});return;
@@ -192,7 +218,7 @@ const server=http.createServer(async(req,res)=>{
   const p=room.players.get(data.token);
   if(!p){send(res,404,{error:'Вход в лобби истёк'});return;}
   p.last=now;tick(room,now);
-  if(req.url==='/api/leave'){room.players.delete(p.token);seizeHost(room);finishIfNeeded(room);if(!room.players.size)rooms.delete(room.code);send(res,200,{});return;}
+  if(req.url==='/api/leave'){room.players.delete(p.token);seizeHost(room);finishIfNeeded(room,now);if(!room.players.size)rooms.delete(room.code);send(res,200,{});return;}
   if(req.url==='/api/ready'){
    if(!['lobby','result'].includes(room.phase)){send(res,409,{error:'Матч уже начался'});return;}
    p.ready=Boolean(data.ready);
@@ -201,7 +227,9 @@ const server=http.createServer(async(req,res)=>{
    if(room.host!==p.token||!['lobby','result'].includes(room.phase)||room.players.size<2||[...room.players.values()].some(player=>!player.ready)){
     send(res,409,{error:'Старт доступен организатору, когда готовы все участники'});return;
    }
-   start(room,now);
+   if(room.map==='duel')room.duel={round:0,total:duelRounds,roundWinner:'',opponentLeft:false,
+    scores:[...room.players.values()].map(player=>({id:idOf(player),name:player.name,wins:0}))};
+   startRound(room,now);
   }
   let damage=0;
   if(req.url==='/api/sync'){
@@ -217,7 +245,7 @@ const server=http.createServer(async(req,res)=>{
      else if(consumable==='big')p.shield=Math.min(100,p.shield+50);
     }
     updatePieces(room,p,data.ops);damage=shoot(room,p,data.shots,now);
-    finishIfNeeded(room);
+    finishIfNeeded(room,now);
    }
   }
   send(res,200,snapshot(room,p,now,damage));

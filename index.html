@@ -44,16 +44,19 @@ body.menu-open > #hotbar,body.menu-open > #interaction,body.menu-open > #invento
 #hotbar .slot{width:78px;min-height:48px}
 #hotbar .slot.active{background:#245b68;outline-color:#9aedd2}
 #roundNotice{position:fixed;left:50%;top:31%;transform:translateX(-50%);z-index:2;background:#152e42ec;border:1px solid #a9dfeb;color:#fff;border-radius:12px;padding:13px 24px;font-size:clamp(17px,3.4vw,38px);text-align:center;pointer-events:none}
+#duelScore{position:fixed;left:50%;top:14px;transform:translateX(-50%);padding:8px 15px;max-width:calc(100vw - 32px);box-sizing:border-box;text-align:center;background:#152e42ec;border:1px solid #66899d;border-radius:10px;pointer-events:none}
 #roomMembers{padding-left:20px;max-height:180px;overflow:auto;color:#d4e8ed;line-height:1.6}
 #availableRooms{max-height:170px;overflow:auto}
 #roomInfo{color:#a7dcd9}#onlineError{color:#ffbeac;min-height:1.2em}
 #ov input{display:block;width:100%;box-sizing:border-box;padding:9px 12px;color:white;background:#223c49;border:1px solid #57717e;border-radius:7px;font:inherit;margin:3px 0 9px}
-body.menu-open>#roundNotice{display:none}
+body.menu-open>#roundNotice,body.menu-open>#duelScore{display:none}
 #ov{position:fixed;inset:0;display:flex;align-items:center;padding:clamp(18px,6vw,96px);box-sizing:border-box;background:linear-gradient(90deg,#101f24fc 0%,#172c31ec 32%,#182d3360 67%,#14283010 100%);overflow:auto}
+body.match-overlay #ov{background:#101f24bf}
+body.match-overlay #menuCard>h1{display:none}
 #ov h1{margin:0;font-size:clamp(34px,6vw,78px);line-height:.93;letter-spacing:-.06em}
 #menuCard{width:min(400px,100%);padding:6px 0}
 #startPrompt{color:#adc8d6;line-height:1.4;margin:14px 0 24px}
-#ov section[hidden]{display:none}
+#startPrompt:empty,#ov section[hidden],#ov button[hidden]{display:none}
 #ov h2{margin:0 0 14px;font-size:28px}
 #ov button{display:block;width:100%;text-align:left;margin:7px 0;padding:11px 15px;background:#24394a;color:#f4fafb;border:1px solid #526d7d;border-radius:9px}
 #ov button.primary{background:#a8ebd4;border-color:#b8efda;color:#10291f;font-size:17px}
@@ -81,6 +84,7 @@ button{font:inherit;padding:8px 18px;border:0;border-radius:8px;background:var(-
 <aside id="editPanel" hidden><b id="editTitle"></b><small>ЛКМ вырезать · ПКМ вернуть · 1–9 секции слева направо · G подтвердить · R сбросить · Esc отменить</small></aside>
 <div id="xh"></div><div id="damageNumber" aria-live="off"></div>
 <div id="roundNotice" hidden role="status"></div>
+<div id="duelScore" hidden></div>
 <div class="p" id="hpP">
  <div class="status-row"><small>Здоровье</small><b id="hv">100</b></div>
  <div class="bar"><i id="hpb"></i></div>
@@ -151,7 +155,13 @@ button{font:inherit;padding:8px 18px;border:0;border-radius:8px;background:var(-
   <section id="settingsPanel" hidden>
    <h2>Настройки</h2>
    <button id="qualityButton">Качество графики</button>
-   <button data-menu-back>Назад</button>
+   <button id="resumeMatch" class="primary" hidden>Продолжить матч</button>
+   <button id="settingsBack" data-menu-back>Назад</button>
+  </section>
+  <section id="duelResultPanel" hidden aria-labelledby="duelResultTitle">
+   <h2 id="duelResultTitle">Итог дуэли</h2>
+   <p id="duelResultScore"></p>
+   <button id="duelBack" class="primary">Вернуться в лобби</button>
   </section>
  </main>
 </div>
@@ -861,7 +871,6 @@ function liveInventory(open){
   inventoryClose.focus({preventScroll:true});
   if(document.pointerLockElement===R.domElement)document.exitPointerLock();
  }else{
-  inventoryJustClosed=true;queueMicrotask(()=>inventoryJustClosed=false);
   freeLook=true;requestMatch();
  }
 }
@@ -1296,17 +1305,25 @@ function strikePickaxe(){
 }
 let shO=[0,0,0];
 /* ---- ввод ---- */
-addEventListener('keydown',e=>{keys[e.code]=1;if(e.code=='Space'||e.code=='Tab')e.preventDefault();if(e.repeat)return;
-if(net?.phase==='countdown'&&running&&e.code!=='Escape')return;
-if(e.code==='Tab'&&running){liveInventory(!inventoryOpen);return;}
-if(inventoryOpen){if(e.code==='Escape')liveInventory(false);else if(e.code==='Delete')dropInventory(selectedSlot);return;}
+addEventListener('keydown',e=>{
+if(e.code==='Escape'&&!e.repeat){
+ if(inventoryOpen)liveInventory(false);
+ else if(running&&!matchOverlay)openMatchOverlay('settings');
+ return;
+}
+if(!running||matchOverlay)return;
+if(e.code==='Space'||e.code==='Tab')e.preventDefault();
+if(roundFrozen())return;
+keys[e.code]=1;if(e.repeat)return;
+if(e.code==='Tab'){liveInventory(!inventoryOpen);return;}
+if(inventoryOpen){if(e.code==='Delete')dropInventory(selectedSlot);return;}
 if(e.code==='KeyG'){ed?closeEdit(true):openEdit();return}
 if(ed){
  if(e.code==='Enter'){closeEdit(true);return;}
  if(e.code==='KeyR'){ed.tiles.fill(true);editBrush=null;updateEdit();return;}
  const cell=/^Digit([1-9])$/.exec(e.code);
  if(cell){const i=Number(cell[1])-1;ed.tiles[i]=!ed.tiles[i];updateEdit();return;}
- if(['Escape','KeyZ','KeyX','KeyC','KeyV','KeyF'].includes(e.code))closeEdit(false);
+ if(['KeyZ','KeyX','KeyC','KeyV','KeyF'].includes(e.code))closeEdit(false);
  else return;
 }
 if(!running||dead>0||net?.isDead)return;
@@ -1319,31 +1336,47 @@ if(e.code==='KeyR'){if(bm&&bt==='s')stairTurn=(stairTurn+1)%4;else reload();}
 if(e.code=='KeyP'){pr=pr==1?.6:1;fit();say('Качество: '+(pr==1?'высокое':'низкое'))}
 const n={Digit1:0,Digit2:1,Digit3:2,Digit4:3,Digit5:4}[e.code];if(n!==undefined)chooseSlot(n);});
 addEventListener('keyup',e=>keys[e.code]=0);addEventListener('blur',()=>{for(const k in keys)keys[k]=0;m=0});
-addEventListener('mousedown',e=>{if(!running||inventoryOpen||waitForMouseUp||net?.isDead||net?.phase==='countdown')return;
+addEventListener('mousedown',e=>{if(!running||matchOverlay||inventoryOpen||waitForMouseUp||net?.isDead||roundFrozen())return;
 if(net?.captureOnClick){net.captureOnClick=false;requestMatch();return;}if(ed){if(e.button===0||e.button===2){editBrush=e.button===2;updateEdit()}return}if(e.button===0){m=1;if(dead<=0){if(bm&&pcd<=0)place();else if(pickaxe)startScytheStrike();}}if(e.button==2&&!bm&&!pickaxe&&activeWeapon())ads=true});
 addEventListener('mouseup',e=>{if(e.button===0||e.button===2)editBrush=null;if(e.button==0){m=0;waitForMouseUp=false;}if(e.button==2)ads=false});
 addEventListener('contextmenu',e=>e.preventDefault());
 
-let lockPending=false,freeLook=false,lastPointer=null,lockTimeout,inventoryJustClosed=false;
+let lockPending=false,freeLook=false,lastPointer=null,lockTimeout,matchOverlay='';
+const roundFrozen=()=>net?.phase==='countdown'||net?.phase==='intermission';
 function startMatch(useFreeLook){
  clearTimeout(lockTimeout);lockPending=false;
  freeLook=useFreeLook;lastPointer=null;
- running=true;last=performance.now();$('ov').style.display='none';document.body.classList.remove('menu-open');
+ if(net&&!useFreeLook)net.captureOnClick=false;
+ matchOverlay='';running=true;last=performance.now();$('ov').style.display='none';document.body.classList.remove('menu-open','match-overlay');
  if(useFreeLook)say('Мышь без захвата. Для непрерывного обзора открой файл в Chrome или Edge.');
 }
-function pauseMatch(){
+function clearMatchInput(){
+ clearTimeout(lockTimeout);lockPending=false;
  inventoryOpen=false;$('inventory').hidden=true;using=null;
- running=false;freeLook=false;lastPointer=null;m=0;ads=false;
+ freeLook=false;lastPointer=null;m=0;ads=false;waitForMouseUp=false;scytheHitPending=false;
  for(const key in keys)keys[key]=0;
  closeEdit(false);
+ if(document.pointerLockElement===R.domElement)document.exitPointerLock();
+}
+function openMatchOverlay(panel){
+ matchOverlay=panel;
+ clearMatchInput();
+ p.vx=p.vz=0;
  $('ov').style.display='flex';
- document.body.classList.add('menu-open');$('startPrompt').textContent='Матч на паузе';$('play').textContent='Продолжить';showPanel(net?'waiting':'home');refreshMenuCharacter();
+ document.body.classList.add('menu-open','match-overlay');
+ $('startPrompt').textContent=panel==='settings'?(net?'Сетевой матч продолжается':'Матч на паузе'):'';
+ showPanel(panel);
+}
+function returnToMenu(panel,prompt){
+ running=false;matchOverlay='';clearMatchInput();
+ $('ov').style.display='flex';document.body.classList.remove('match-overlay');document.body.classList.add('menu-open');
+ $('startPrompt').textContent=prompt;showPanel(panel);refreshMenuCharacter();
 }
 function startWithoutLock(){
  if(lockPending)startMatch(true);
 }
 addEventListener('mousemove',e=>{
- if(!running||inventoryOpen||net?.phase==='countdown')return;
+ if(!running||matchOverlay||inventoryOpen||roundFrozen())return;
  let dx=e.movementX,dy=e.movementY;
  if(freeLook){
   dx=lastPointer?e.clientX-lastPointer.x:0;
@@ -1364,13 +1397,12 @@ function requestMatch(){
  catch{startWithoutLock();}
 }
 document.addEventListener('pointerlockchange',()=>{
- if(document.pointerLockElement===R.domElement)startMatch(false);
- else if(running&&!freeLook&&!inventoryOpen)pauseMatch();
+ if(document.pointerLockElement===R.domElement){
+  if(!lockPending&&(matchOverlay||!running)){document.exitPointerLock();return;}
+  startMatch(false);
+ }else if(running&&!matchOverlay&&!freeLook&&!inventoryOpen)openMatchOverlay('settings');
 });
 document.addEventListener('pointerlockerror',startWithoutLock);
-addEventListener('keydown',e=>{
- if(e.code==='Escape'&&running&&freeLook&&!inventoryOpen&&!inventoryJustClosed)pauseMatch();
-});
 /* ---- физика ---- */
 function phys(dt){
 for(const ax of[0,1]){const k=ax?'z':'x',dd=(ax?p.vz:p.vx)*dt;if(!dd)continue;const previous=p[k];const bound=arenaMaps[currentArena].bound;p[k]=Math.max(-bound,Math.min(bound,p[k]+dd));
@@ -1433,7 +1465,7 @@ function drawMinimap(dt){
 }
 paintMinimapBase();
 function update(dt){tm+=dt;drawMinimap(dt);
- if(net&&net.phase==='countdown'){paintRoundNotice();updateOnlineActors(dt);return;}
+ if(roundFrozen()){paintRoundNotice();updateOnlineActors(dt);return;}
  paintRoundNotice();
 const wantsCrouch=Boolean(keys.ControlLeft)&&dead<=0&&!inventoryOpen;
 crouched=wantsCrouch||(crouched&&overlap(p.x,p.y+.045,p.z,.3,1.75)>-Infinity);
@@ -1547,10 +1579,12 @@ function setSkin(id){
  old.g.traverse(model=>{if(model.userData.ownedGeometry)model.geometry.dispose();});
  refreshMenuCharacter();
 }
-const panels=['home','lobby','shop','settings','online','create','join','waiting'];
+const panels=['home','lobby','shop','settings','online','create','join','waiting','duelResult'];
 function showPanel(name){
  for(const panel of panels)$(panel+'Panel').hidden=panel!==name;
  if(name==='shop')renderShop();
+ $('resumeMatch').hidden=matchOverlay!=='settings';
+ $('settingsBack').hidden=matchOverlay==='settings';
  $('onlineError').hidden=!['online','create','join','waiting'].includes(name);
 }
 function renderShop(){
@@ -1593,6 +1627,7 @@ $('play').onclick=()=>{if(net&&['lobby','result'].includes(net.phase))showPanel(
 $('lobby').onclick=()=>showPanel('lobby');
 $('shop').onclick=()=>showPanel('shop');
 $('settings').onclick=()=>showPanel('settings');
+$('resumeMatch').onclick=requestMatch;
 $('launchLobby').onclick=()=>{restartLobby();requestMatch();};
 document.querySelectorAll('[data-menu-back]').forEach(button=>button.onclick=()=>showPanel('home'));
 const qualityButton=$('qualityButton');
@@ -1704,13 +1739,23 @@ function updateOnlineActors(dt){
 }
 function paintRoundNotice(){
  const node=$('roundNotice');
+ const score=$('duelScore'),duel=running&&net?.lastData?.duel;
+ const scoreText=duel?'Раунд '+duel.round+' / '+duel.total+' · '+duelScoreText(duel):'';
+ if(score.textContent!==scoreText)score.textContent=scoreText;
+ score.hidden=!scoreText;
  let label='';
  if(net?.phase==='countdown')label='Старт через '+Math.max(1,Math.ceil((net.goAt-performance.now())/1000));
+ else if(net?.phase==='intermission'&&duel){
+  const recap=duel.roundWinner?'Раунд выиграл: '+duel.roundWinner:'Раунд завершился вничью';
+  label=recap+' · Следующий через '+Math.max(1,Math.ceil((net.goAt-performance.now())/1000));
+ }
  else if(net?.isDead&&net.phase==='live')label='Ты выбыл · дождись конца раунда';
  if(node.textContent!==label)node.textContent=label;
  node.hidden=!label;
 }
+const duelScoreText=duel=>duel.scores.map(player=>player.name+' '+player.wins).join(' : ');
 function launchOnline(data,room){
+ const wasRunning=running;
  if(ed)closeEdit(false);
  selectArena(data.map);restartArenaProps();
  for(const bot of botPool)bot.c.g.visible=false;
@@ -1724,15 +1769,17 @@ function launchOnline(data,room){
  fcd=pcd=rel=0;scytheMotion=0;PC.g.rotation.x=0;crouched=false;crouchBlend=0;
  resetAfterDeath();inventoryOpen=false;$('inventory').hidden=true;$('interaction').hidden=true;
  for(const key in keys)keys[key]=0;
- startMatch(document.pointerLockElement!==R.domElement);
- if(room.captureOnClick)say('Кликни по арене для захвата мыши');
+ if(!wasRunning){
+  startMatch(room.captureOnClick);
+  if(room.captureOnClick)say('Кликни по арене для захвата мыши');
+ }
 }
 function receiveRoom(data,room){
  if(room!==net||data.version<room.version)return;
  room.version=data.version;room.phase=data.phase;room.zone=data.zone;room.goAt=performance.now()+data.countdown*1000;
  room.lastData=data;
  if(data.round!==room.round&&['countdown','live'].includes(data.phase))launchOnline(data,room);
- if(['countdown','live'].includes(data.phase)){
+ if(['countdown','live','intermission'].includes(data.phase)){
   copyBoard(data,room);drawZone(data.map==='box'?data.zone:null);
   const present=new Set();
   for(const other of data.roster){
@@ -1754,9 +1801,15 @@ function receiveRoom(data,room){
    room.effect=effect.id;
   }
  }else if(data.phase==='result'&&room.round===data.round&&running){
-  resetAfterDeath();pauseMatch();
-  if(document.pointerLockElement===R.domElement)document.exitPointerLock();
-  $('startPrompt').textContent='Раунд завершён';
+  if(data.duel){
+   if(matchOverlay!=='duelResult'){
+    $('duelResultTitle').textContent=data.winner==='Ничья'?'Ничья':'Победитель: '+data.winner;
+    $('duelResultScore').textContent=duelScoreText(data.duel)+(data.duel.opponentLeft?' · Соперник вышел':' · '+data.duel.total+' раундов');
+    openMatchOverlay('duelResult');
+   }
+  }else{
+   resetAfterDeath();returnToMenu('waiting','Раунд завершён');
+  }
  }
  paintWaiting(data);paintRoundNotice();
 }
@@ -1793,8 +1846,7 @@ function disconnectRoom(){
  if(!net)return;
  const room=net;net=null;clearTimeout(room.timer);
  callRoom('leave',credentials(room)).catch(()=>{});
- clearRemote();if(running)pauseMatch();
- if(document.pointerLockElement===R.domElement)document.exitPointerLock();
+ clearRemote();returnToMenu('online','Тренировочная арена с ботами');
  if(currentArena!=='harbor')selectArena('harbor');
  restartArenaProps();restartLobby();showPanel('online');onlineError();paintRoundNotice();
 }
@@ -1832,6 +1884,9 @@ $('refreshRooms').onclick=refreshPublicRooms;
 $('roomReady').onclick=()=>{if(net?.lastData)commandRoom('ready',{ready:!net.lastData.self.ready});};
 $('roomStart').onclick=()=>commandRoom('start');
 $('roomLeave').onclick=disconnectRoom;
+$('duelBack').onclick=()=>{
+ returnToMenu('waiting','Дуэль завершена');paintRoundNotice();
+};
 $('copyRoom').onclick=async()=>{
  if(!net)return;
  try{await navigator.clipboard.writeText(net.code);onlineError('Код скопирован');}
@@ -1843,7 +1898,9 @@ addEventListener('pagehide',()=>{
 });
 let last=performance.now();
 function loop(now){requestAnimationFrame(loop);if(!running){if(!drawn){renderMenu();drawn=true}return}
-let dt=(now-last)/1000;if(dt<.0125)return;last=now;update(Math.min(dt,.05));R.render(scene,cam)}
+let dt=(now-last)/1000;if(dt<.0125)return;last=now;
+if(matchOverlay==='duelResult'||(matchOverlay==='settings'&&!net))return;
+update(Math.min(dt,.05));R.render(scene,cam)}
 fit();update(.001);refreshMenuCharacter();renderMenu();requestAnimationFrame(loop);
 </script></body></html>
 
